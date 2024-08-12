@@ -48,6 +48,10 @@ next_proba = model.predict_proba([[next_date_ordinal]])
 next_value = np.dot(next_proba, gnb.classes_)  # Calculate the expected value for the next date
 
 # Train the model Linear Regression to predict the next value using the linear trend
+# linear_model = linear_model.LinearRegression()
+# linear_model = linear_model.TheilSenRegressor()
+# linear_model = linear_model.LogisticRegression(C=1.0)
+# linear_model = linear_model.GammaRegressor()
 linear_model = linear_model.BayesianRidge()
 linear_model.fit(X, y)
 
