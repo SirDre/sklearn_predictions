@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from scipy.optimize import curve_fit
 
 # Default variables
-predicted_date = "31-Aug-24"
+predicted_date = "20-Nov-24"
 predicted_list = []
 actual_list = []
 
@@ -78,14 +78,21 @@ params, _ = curve_fit(sinusoidal_model, x_data, y_data, p0=[np.std(y), 2 * np.pi
 cyclical_adjustment = sinusoidal_model(next_date_ordinal, *params)
 
 # Calculate Weighted Average prediction
-weight_naive_bayes = 0.99947073049787413660062243488382  # you can adjust these
+weight_naive_bayes = 0.99973895177364354734851780911949  # you can adjust these
 weight_linear_trend = slope
+weight_linear_offset = 494509  # you can adjust these
+weight_cyclical_patterns = cyclical_adjustment  # you can adjust these
 weight_cyclical = 0.1
-
+"""
 next_value_weighted_avg = (
         weight_naive_bayes * next_value[0] +
         weight_linear_trend * next_value_linear[0] +
         weight_cyclical * cyclical_adjustment
+)
+"""
+next_value_weighted_avg = (
+        weight_naive_bayes * weight_cyclical_patterns + weight_linear_offset +
+        weight_linear_trend * next_value_linear[0]
 )
 
 # Add the next prediction
