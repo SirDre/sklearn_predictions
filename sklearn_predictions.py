@@ -1,140 +1,243 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from pandas import DataFrame
 from sklearn.naive_bayes import GaussianNB
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn import linear_model as lm
-from sklearn.ensemble import RandomForestRegressor
-from datetime import datetime, timedelta
-from scipy.optimize import curve_fit
+from datetime import datetime
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-# Default variables
-predicted_date = "20-Nov-24"
-predicted_list = []
-actual_list = []
+# Configuration constants
+PREDICTED_DATE = "27-Nov-24"
+FILE_PATH = "results.csv"
 
-# Read the data from the CSV file and parse dates
-df = pd.read_csv("results.csv", dtype={'Date': 'object'})
+def load_and_prepare_data(file_path) -> tuple:
+    """
+    Load data from CSV and prepare it for analysis
 
-# Convert data to DataFrame
-df['date'] = pd.to_datetime(df['Date'], format='%d-%b-%y')
+    Parameter:
+        file_path (str): Path to the CSV file
 
-# Convert dates to ordinal for regression
-df['date_ordinal'] = df['date'].apply(lambda x: x.toordinal())
+    Returns:
+        tuple: DataFrame and prepared X, y data for modeling
+    """
+    # Read and parse dates
+    df = pd.read_csv(file_path, dtype={'Date': 'object'})
+    df['date'] = pd.to_datetime(df['Date'], format='%d-%b-%y')
+    df['date_ordinal'] = df['date'].apply(lambda x: x.toordinal())
 
-# Prepare training data
-X = df['date_ordinal'].values.reshape(-1, 1)
-y = df['Numbers'].values
+    # Prepare training data
+    X = df['date_ordinal'].values.reshape(-1, 1)
+    y = df['Numbers'].values
 
-# Train the Gaussian Naive Bayes model with calibration
-gnb = GaussianNB()
-gnb.fit(X, y)
+    return df, X, y
 
-# Calibrate the model
-model = CalibratedClassifierCV(gnb, cv="prefit")
-model.fit(X, y)
+def train_naive_bayes_model(X, y) -> tuple:
+    """
+    Train and calibrate a Gaussian Naive Bayes model
 
-# loop
-for date_ordinal in df['date_ordinal']:
-    predicted_proba = model.predict_proba([[date_ordinal]])
-    predicted_value = np.dot(predicted_proba, gnb.classes_)  # Calculate the expected value
-    predicted_list.append(predicted_value[0])  # Append the expected value, not the entire array
-    actual_value = df.loc[df['date_ordinal'] == date_ordinal, 'Numbers'].iloc[0]
-    actual_list.append(int(actual_value))
+    Parameter:
+        X (numpy.array): Feature matrix
+        y (numpy.array): Target values
 
-# Predict for a future date using the Naive Bayes model
-next_date = datetime.strptime(predicted_date, '%d-%b-%y')
-next_date_ordinal = next_date.toordinal()
-next_proba = model.predict_proba([[next_date_ordinal]])
-next_value = np.dot(next_proba, gnb.classes_)  # Calculate the expected value for the next date
+    Returns:
+        tuple: Trained GNB model and calibrated model
+    """
+    gnb = GaussianNB()
+    gnb.fit(X, y)
+    model = CalibratedClassifierCV(gnb, cv='prefit')
+    model.fit(X, y)
+    return gnb, model
 
-# Train the model Linear Regression to predict the next value using the linear trend
-# linear_model = lm.LinearRegression()
-# linear_model = lm.TheilSenRegressor()
-# linear_model = lm.LogisticRegression(C=1.0)
-# linear_model = lm.GammaRegressor()
-# linear_model = RandomForestRegressor(n_estimators=9, random_state=0)
-linear_model = lm.BayesianRidge()
-linear_model.fit(X, y)
+def generate_predictions(df: DataFrame, model: CalibratedClassifierCV, gnb: GaussianNB) -> tuple:
+    """
+    Generate predictions for existing dates
 
-# Predict using the linear trend model
-next_value_linear = linear_model.predict([[next_date_ordinal]])
+    Parameter:
+        df (DataFrame): Input data
+        model (CalibratedClassifierCV): Trained calibrated model
+        gnb (GaussianNB): Trained GNB model
 
-# Calculate the slope predicted by the linear regression model
-slope = linear_model.coef_[0]
+    Returns:
+        tuple: Lists of predicted and actual values
+    """
+    predicted_list = []
+    actual_list = []
 
-# A sine function to the data for cyclical adjustments
-def sinusoidal_model(x, A, B, C, D):
-    return A * np.sin(B * x + C) + D
+    for date_ordinal in df['date_ordinal']:
+        predicted_proba = model.predict_proba([[date_ordinal]])
+        predicted_value = np.dot(predicted_proba, gnb.classes_)
+        predicted_list.append(predicted_value[0])
+        actual_value = df.loc[df['date_ordinal'] == date_ordinal, 'Numbers'].iloc[0]
+        actual_list.append(int(actual_value))
 
-# Wrapper to convert dates
-x_data = df['date_ordinal']
-y_data = df['Numbers']
+    return predicted_list, actual_list
 
-# Fit the curve
-params, _ = curve_fit(sinusoidal_model, x_data, y_data, p0=[np.std(y), 2 * np.pi / 365, 0, np.mean(y)])
+def train_linear_model(X, y) -> tuple:
+    """
+    Train a Bayesian Ridge regression model
 
-# Predicting the cyclical adjustment for the given future date
-cyclical_adjustment = sinusoidal_model(next_date_ordinal, *params)
+    Parameter:
+        X (numpy.array): Feature matrix
+        y (numpy.array): Target values
 
-# Calculate Weighted Average prediction
-weight_naive_bayes = 0.99973895177364354734851780911949  # you can adjust these
-weight_linear_trend = slope
-weight_linear_offset = 494509  # you can adjust these
-weight_cyclical_patterns = cyclical_adjustment  # you can adjust these
-weight_cyclical = 0.1
-"""
-next_value_weighted_avg = (
-        weight_naive_bayes * next_value[0] +
-        weight_linear_trend * next_value_linear[0] +
-        weight_cyclical * cyclical_adjustment
-)
-"""
-next_value_weighted_avg = (
-        weight_naive_bayes * weight_cyclical_patterns + weight_linear_offset +
-        weight_linear_trend * next_value_linear[0]
-)
+    Returns:
+        tuple: Trained model and slope
+    """
+    linear_model = lm.BayesianRidge()
+    linear_model.fit(X, y)
+    slope = linear_model.coef_[0]
+    return linear_model, slope
 
-# Add the next prediction
-predicted_list.append(next_value[0])
-actual_list.append(next_value_weighted_avg)  # guess an actual value for the future date
+def calculate_cyclical_adjustments(data: list) -> float:
+    """
+    Calculate cyclical adjustments based on historical patterns
 
-# Append the future date to the date list as datetime objects
-predicted_date = list(pd.to_datetime(df['Date'], format='%d-%b-%y')) + [next_date]
-actual_date = list(pd.to_datetime(df['Date'], format='%d-%b-%y')) + [next_date]
+    Parameter:
+        data (list): List of tuples containing dates and values
 
-# Create a DataFrame with the actual and predicted values
-result_df = pd.DataFrame({
-    'ADate': actual_date,
-    'Actual': actual_list,
-    'PDate': predicted_date,
-    'Predicted_NaiveBayes': predicted_list,
-    'Predicted_LinearTrend': list(predicted_list[:-1]) + [next_value_linear[0]],  # Use linear trend for the last prediction
-    'Predicted_CyclicalAdjustment': list(predicted_list[:-1]) + [cyclical_adjustment]  # Use cyclical adjustment for another prediction
-})
+    Returns:
+        float: Calculated cyclical adjustment value
+    """
+    dates = [datetime.strptime(d, '%d-%b-%y') for d, _ in data]
+    numbers = [int(v) for _, v in data]
+    dates = np.array(dates)
+    values = np.array(numbers)
+    time_diffs = np.array([(dates[-1] - date).days for date in dates])
 
-# Plotting the results
-plt.figure(figsize=(10, 6))
-plt.plot(result_df['ADate'], result_df['Actual'], color='purple', label='Actual', marker='o')
-plt.plot(result_df['PDate'], result_df['Predicted_LinearTrend'], color='pink', label='Predicted (Linear Trend)', linestyle='-.', marker='^')
-plt.xlabel('Date')
-plt.ylabel('Value')
-plt.title('Actual and Value Prediction')
-plt.legend()
-plt.grid(True)
-plt.xticks(rotation=45)
-plt.tight_layout()
+    cycles = [7, 30, 365]  # weekly, monthly, yearly
+    predictions = []
 
-# Annotate the predicted points
-plt.axvline(x=next_date, color='red', linestyle='--')
-plt.annotate(f'{int(next_value_weighted_avg):,}', (next_date, next_value_weighted_avg), textcoords="offset points", xytext=(0, 10), ha='center', color='orange')
-plt.annotate(f'{int(next_value_linear[0]):,}', (next_date, next_value_linear), textcoords="offset points", xytext=(0, -20), ha='center', color='red')
-plt.annotate(f'{int(cyclical_adjustment):,}', (next_date, cyclical_adjustment), textcoords="offset points", xytext=(0, 20), ha='center', color='green')
+    for cycle in cycles:
+        cycle_indices = np.where(time_diffs % cycle == 0)[0]
+        if len(cycle_indices) > 0:
+            cycle_prediction = np.mean(values[cycle_indices])
+            predictions.append(cycle_prediction)
 
-plt.show()
+    if predictions:
+        return int(np.mean(predictions))
+    else:
+        ex_model = ExponentialSmoothing(values, seasonal='add', seasonal_periods=12).fit()
+        forecast = ex_model.forecast(steps=1)
+        return forecast.iloc[0]
 
-# Print the predicted next values
-print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Naive Bayes): {int(next_value[0]):,}")
-print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Linear Trend): {int(next_value_linear[0]):,}")
-print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Cyclical Adjustment): {int(cyclical_adjustment):,}")
-print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Weighted Avg with Cyclical Adjustment): {int(next_value_weighted_avg):,}")
+def plot_results(result_df: DataFrame, next_date: datetime, next_value_weighted_avg: float, next_value_linear: float, cyclical_adjustment: float) -> None:
+    """
+    Create and display visualization of results
+
+    Parameter:
+        result_df (DataFrame): Results data
+        next_date (datetime): Future prediction date
+        next_value_weighted_avg (float): Weighted average prediction
+        next_value_linear (float): Linear trend prediction
+        cyclical_adjustment (float): Cyclical adjustment prediction
+    """
+    plt.figure(figsize=(10, 6))
+    plt.plot(result_df['ADate'], result_df['Actual'], color='purple', label='Actual', marker='o')
+    plt.plot(result_df['PDate'], result_df['Predicted_LinearTrend'], color='pink',
+             label='Predicted (Linear Trend)', linestyle='-.', marker='^')
+    plt.plot(result_df['PDate'], result_df['Predicted_CyclicalAdjustment'], color='green',
+             label='Predicted (Cyclical Adjustment)', linestyle='--', marker='*')
+
+    plt.xlabel('Date')
+    plt.ylabel('Value')
+    plt.title('Actual and Value Prediction')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # Annotate predictions
+    plt.axvline(x=next_date, color='red', linestyle='--')
+    plt.annotate(f'{int(next_value_weighted_avg):,}', (next_date, next_value_weighted_avg),
+                 textcoords="offset points", xytext=(0, 10), ha='center', color='purple')
+    plt.annotate(f'{int(next_value_linear[0]):,}', (next_date, next_value_linear),
+                 textcoords="offset points", xytext=(0, -20), ha='center', color='pink')
+    plt.annotate(f'{int(cyclical_adjustment):,}', (next_date, cyclical_adjustment),
+                 textcoords="offset points", xytext=(0, 20), ha='center', color='green')
+    plt.show()
+
+def print_predictions(next_date, next_value, next_value_linear, cyclical_adjustment, next_value_weighted_avg) -> None:
+    """
+    Print prediction results
+
+    Parameter:
+        next_date (datetime): Future prediction date
+        next_value (float): Naive Bayes prediction
+        next_value_linear (float): Linear trend prediction
+        cyclical_adjustment (float): Cyclical adjustment prediction
+        next_value_weighted_avg (float): Weighted average prediction
+    """
+    print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Naive Bayes): {int(next_value[0]):,}")
+    print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Linear Trend): {int(next_value_linear[0]):,}")
+    print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Cyclical Adjustment): {int(cyclical_adjustment):,}")
+    print(f"Predicted value for {next_date.strftime('%d-%b-%y')} (Weighted Avg with Cyclical Adjustment): {int(next_value_weighted_avg):,}")
+
+def main() -> None:
+    """
+    Main function to for the prediction process
+    """
+
+    # Model weights
+    weight_naive_bayes = 0.99973895177364354734851780911949
+    weight_cyclical_patterns = 9844365 #cyclical_adjustment
+    weight_linear_offset = 42900
+    weight_cyclical = 0.1
+
+    # Load and prepare data
+    df, X, y = load_and_prepare_data(FILE_PATH)
+
+    # Train models
+    gnb, calibrated_model = train_naive_bayes_model(X, y)
+    linear_model, slope = train_linear_model(X, y)
+
+    # Generate predictions for existing dates
+    predicted_list, actual_list = generate_predictions(df, calibrated_model, gnb)
+
+    # Predict for future date
+    next_date = datetime.strptime(PREDICTED_DATE, '%d-%b-%y')
+    next_date_ordinal = next_date.toordinal()
+    next_proba = calibrated_model.predict_proba([[next_date_ordinal]])
+    next_value = np.dot(next_proba, gnb.classes_)
+    next_value_linear = linear_model.predict([[next_date_ordinal]])
+
+    # Calculate cyclical adjustment
+    data_for_cyclical_adjustment = list(zip(df['Date'], df['Numbers']))
+    cyclical_adjustment = calculate_cyclical_adjustments(data_for_cyclical_adjustment)
+
+    """
+    # Calculate weighted average prediction
+    next_value_weighted_avg = (
+            weight_naive_bayes * cyclical_adjustment +
+            weight_linear_offset +
+            slope * next_value_linear[0]
+    )
+    """
+    # Calculate Weighted Average prediction
+    next_value_weighted_avg = (
+            weight_naive_bayes * weight_cyclical_patterns + weight_linear_offset +  # next_value[0] +
+            slope * next_value_linear[0]
+    )
+
+    # Prepare results DataFrame
+    predicted_date_list = list(pd.to_datetime(df['Date'], format='%d-%b-%y')) + [next_date]
+    actual_date_list = list(pd.to_datetime(df['Date'], format='%d-%b-%y')) + [next_date]
+
+    predicted_list.append(next_value[0])
+    actual_list.append(next_value_weighted_avg)
+
+    result_df = pd.DataFrame({
+        'ADate': actual_date_list,
+        'Actual': actual_list,
+        'PDate': predicted_date_list,
+        'Predicted_NaiveBayes': predicted_list,
+        'Predicted_LinearTrend': list(predicted_list[:-1]) + [next_value_linear[0]],
+        'Predicted_CyclicalAdjustment': list(predicted_list[:-1]) + [cyclical_adjustment]
+    })
+
+    # Visualize and print results
+    plot_results(result_df, next_date, next_value_weighted_avg, next_value_linear, cyclical_adjustment)
+    print_predictions(next_date, next_value, next_value_linear, cyclical_adjustment, next_value_weighted_avg)
+
+main()
