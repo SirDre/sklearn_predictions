@@ -9,7 +9,7 @@ from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # Configuration constants
-PREDICTED_DATE = "27-Nov-24"
+PREDICTED_DATE = "18-Dec-24"
 FILE_PATH = "results.csv"
 
 def load_and_prepare_data(file_path) -> tuple:
@@ -122,9 +122,30 @@ def calculate_cyclical_adjustments(data: list) -> float:
         forecast = ex_model.forecast(steps=1)
         return forecast.iloc[0]
 
+# function to add value labels
+def plot_labels(x, y, color):
+    """
+    Add value labels to plot points with proper formatting and positioning
+
+    Parameters:
+        x: x-coordinates (dates)
+        y: y-coordinates (values)
+        color: label color (string)
+    """
+    for i in range(len(x)):
+        # Format large numbers with commas
+        label = f'{int(y[i]):,}'
+        plt.annotate(label,
+                     (x[i], y[i]),
+                     textcoords="offset points",
+                     xytext=(0, 10),  # 10 points vertical offset
+                     ha='center',     # horizontal alignment
+                     va='bottom',     # vertical alignment
+                     color=color)     # color
+
 def plot_results(result_df: DataFrame, next_date: datetime, next_value_weighted_avg: float, next_value_linear: float, cyclical_adjustment: float) -> None:
     """
-    Create and display visualization of results
+    Create and display visualization of results with improved layout and labels
 
     Parameter:
         result_df (DataFrame): Results data
@@ -133,29 +154,52 @@ def plot_results(result_df: DataFrame, next_date: datetime, next_value_weighted_
         next_value_linear (float): Linear trend prediction
         cyclical_adjustment (float): Cyclical adjustment prediction
     """
-    plt.figure(figsize=(10, 6))
-    plt.plot(result_df['ADate'], result_df['Actual'], color='purple', label='Actual', marker='o')
+    # Create figure with larger size and adjusted margins
+    plt.figure(figsize=(15, 8))
+
+    # Add more padding to the bottom and right
+    plt.subplots_adjust(bottom=0.2, right=0.95)
+
+    # Plot the actual values
+    plt.plot(result_df['ADate'], result_df['Actual'],
+             color='purple', label='Actual', marker='o')
     plt.plot(result_df['PDate'], result_df['Predicted_LinearTrend'], color='pink',
              label='Predicted (Linear Trend)', linestyle='-.', marker='^')
     plt.plot(result_df['PDate'], result_df['Predicted_CyclicalAdjustment'], color='green',
-             label='Predicted (Cyclical Adjustment)', linestyle='--', marker='*')
+            label='Predicted (Cyclical Adjustment)', linestyle='--', marker='*')
+
+    # Add value labels to the points
+    plot_labels(result_df['ADate'], result_df['Actual'], 'purple')
+    plot_labels(result_df['PDate'], result_df['Predicted_CyclicalAdjustment'], 'green')
 
     plt.xlabel('Date')
     plt.ylabel('Value')
     plt.title('Actual and Value Prediction')
-    plt.legend()
-    plt.grid(True)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
 
-    # Annotate predictions
+    # Specify legend location explicitly instead of using 'best'
+    plt.legend(loc='upper left', bbox_to_anchor=(0.02, 0.98))
+
+    plt.grid(True)
+
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45, ha='right')
+
+    # Add the prediction line and label
     plt.axvline(x=next_date, color='red', linestyle='--')
-    plt.annotate(f'{int(next_value_weighted_avg):,}', (next_date, next_value_weighted_avg),
-                 textcoords="offset points", xytext=(0, 10), ha='center', color='purple')
+    """plt.annotate(f'{int(next_value_weighted_avg):,}',
+                 (next_date, next_value_weighted_avg),
+                 textcoords="offset points",
+                 xytext=(0, 10),
+                 ha='center',
+                 color='purple')
+    """
     plt.annotate(f'{int(next_value_linear[0]):,}', (next_date, next_value_linear),
-                 textcoords="offset points", xytext=(0, -20), ha='center', color='pink')
-    plt.annotate(f'{int(cyclical_adjustment):,}', (next_date, cyclical_adjustment),
-                 textcoords="offset points", xytext=(0, 20), ha='center', color='green')
+                textcoords="offset points", xytext=(0, -20), ha='center', color='pink')
+    #plt.annotate(f'{int(cyclical_adjustment):,}', (next_date, cyclical_adjustment),
+    #             textcoords="offset points", xytext=(0, 20), ha='center', color='green')
+
+    # Ensure everything fits within the figure bounds
+    plt.tight_layout()
     plt.show()
 
 def print_predictions(next_date, next_value, next_value_linear, cyclical_adjustment, next_value_weighted_avg) -> None:
@@ -179,12 +223,6 @@ def main() -> None:
     Main function to for the prediction process
     """
 
-    # Model weights
-    weight_naive_bayes = 0.99973895177364354734851780911949
-    weight_cyclical_patterns = 9844365 #cyclical_adjustment
-    weight_linear_offset = 42900
-    weight_cyclical = 0.1
-
     # Load and prepare data
     df, X, y = load_and_prepare_data(FILE_PATH)
 
@@ -206,17 +244,14 @@ def main() -> None:
     data_for_cyclical_adjustment = list(zip(df['Date'], df['Numbers']))
     cyclical_adjustment = calculate_cyclical_adjustments(data_for_cyclical_adjustment)
 
-    """
+    # Model weights
+    weight_naive_bayes = 0.99795541336866801512165950581255 # adjust
+    weight_linear_offset = 1589  # adjust
+     
     # Calculate weighted average prediction
     next_value_weighted_avg = (
             weight_naive_bayes * cyclical_adjustment +
             weight_linear_offset +
-            slope * next_value_linear[0]
-    )
-    """
-    # Calculate Weighted Average prediction
-    next_value_weighted_avg = (
-            weight_naive_bayes * weight_cyclical_patterns + weight_linear_offset +  # next_value[0] +
             slope * next_value_linear[0]
     )
 
