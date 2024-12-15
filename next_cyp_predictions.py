@@ -9,7 +9,7 @@ from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # Configuration constants
-PREDICTED_DATE = "20-Nov-24"
+PREDICTED_DATE = "27-Nov-24"
 FILE_PATH = "results.csv"
 
 def load_and_prepare_data(file_path) -> tuple:
@@ -50,7 +50,7 @@ def train_naive_bayes_model(X, y) -> tuple:
     model.fit(X, y)
     return gnb, model
 
-def generate_predictions(df: DataFrame, model, gnb) -> tuple:
+def generate_predictions(df: DataFrame, model: CalibratedClassifierCV, gnb: GaussianNB) -> tuple:
     """
     Generate predictions for existing dates
 
@@ -90,7 +90,7 @@ def train_linear_model(X, y) -> tuple:
     slope = linear_model.coef_[0]
     return linear_model, slope
 
-def calculate_cyclical_adjustments(data) -> float:
+def calculate_cyclical_adjustments(data: list) -> float:
     """
     Calculate cyclical adjustments based on historical patterns
 
@@ -122,7 +122,7 @@ def calculate_cyclical_adjustments(data) -> float:
         forecast = ex_model.forecast(steps=1)
         return forecast.iloc[0]
 
-def plot_results(result_df, next_date, next_value_weighted_avg, next_value_linear, cyclical_adjustment):
+def plot_results(result_df: DataFrame, next_date: datetime, next_value_weighted_avg: float, next_value_linear: float, cyclical_adjustment: float) -> None:
     """
     Create and display visualization of results
 
@@ -158,7 +158,7 @@ def plot_results(result_df, next_date, next_value_weighted_avg, next_value_linea
                  textcoords="offset points", xytext=(0, 20), ha='center', color='green')
     plt.show()
 
-def print_predictions(next_date, next_value, next_value_linear, cyclical_adjustment, next_value_weighted_avg):
+def print_predictions(next_date, next_value, next_value_linear, cyclical_adjustment, next_value_weighted_avg) -> None:
     """
     Print prediction results
 
@@ -181,8 +181,8 @@ def main() -> None:
 
     # Model weights
     weight_naive_bayes = 0.99973895177364354734851780911949
-    weight_cyclical_patterns = 8970990 #cyclical_adjustment
-    weight_linear_offset = -763860
+    weight_cyclical_patterns = 9844365 #cyclical_adjustment
+    weight_linear_offset = 42900
     weight_cyclical = 0.1
 
     # Load and prepare data
