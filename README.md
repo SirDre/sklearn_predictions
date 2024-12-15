@@ -20,6 +20,18 @@ Install pandas is using ::
     or
     sudo apt-get install python3-pandas
 
+Install matplotlib is using ::
+
+    pip install matplotlib
+    or
+    sudo apt-get install python3-matplotlib
+
+Install statsmodels is using ::
+
+    pip install statsmodels
+    or
+    sudo apt-get install python3-statsmodels
+
 Install scikit-learn is using ::
 
 
