@@ -14,10 +14,18 @@ requires scikit-learn:
 
 User installation
 ~~~~~~~~~~~~~~~~~
+Install pandas is using ::
+
+    pip install pandas
+    or
+    sudo apt-get install python3-pandas
 
 Install scikit-learn is using ::
 
+
     pip install -U scikit-learn
+    or
+    sudo apt-get install python3-sklearn
 
 Testing
 ~~~~~~~
