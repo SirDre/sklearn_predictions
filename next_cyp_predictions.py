@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from pandas import DataFrame
 from sklearn.naive_bayes import GaussianNB
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 from sklearn import linear_model as lm
 from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -46,7 +47,10 @@ def train_naive_bayes_model(X, y) -> tuple:
     """
     gnb = GaussianNB()
     gnb.fit(X, y)
-    model = CalibratedClassifierCV(gnb, cv='prefit')
+    # Single fold spanning the whole dataset replicates the removed cv='prefit'
+    # behavior: no held-out data, calibrate directly on the frozen model's predictions.
+    all_indices = np.arange(len(y))
+    model = CalibratedClassifierCV(FrozenEstimator(gnb), cv=[(all_indices, all_indices)])
     model.fit(X, y)
     return gnb, model
 
@@ -193,7 +197,7 @@ def plot_results(result_df: DataFrame, next_date: datetime, next_value_weighted_
                  ha='center',
                  color='purple')
     """
-    plt.annotate(f'{int(next_value_linear[0]):,}', (next_date, next_value_linear),
+    plt.annotate(f'{int(next_value_linear[0]):,}', (next_date, next_value_linear[0]),
                 textcoords="offset points", xytext=(0, -20), ha='center', color='pink')
     #plt.annotate(f'{int(cyclical_adjustment):,}', (next_date, cyclical_adjustment),
     #             textcoords="offset points", xytext=(0, 20), ha='center', color='green')
