@@ -8,7 +8,7 @@ from math import comb
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
-PREDICTED_DATE = "30-Sep-24"
+PREDICTED_DATE = "30-Sep-26"
 FILE_PATH = "results.csv"              # Date, Numbers  (Numbers = combination id)
 REFERENCE_PATH = "649Results2020.txt"  # FREQ, RESULTS, DATE  (id -> "n1 n2 n3 n4 n5 n6")
 
