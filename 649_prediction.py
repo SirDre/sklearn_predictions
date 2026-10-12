@@ -12,7 +12,7 @@ from pandas import DataFrame
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
-PREDICTED_DATE = "10-Oct-26"
+PREDICTED_DATE = "14-Oct-26"
 FILE_PATH = "results.csv"              # Date, Numbers  (Numbers = combination id)
 REFERENCE_PATH = "649Results2020.txt"  # FREQ, RESULTS, DATE  (id -> "n1 n2 n3 n4 n5 n6")
 
@@ -64,7 +64,7 @@ QUICK_POOL_HOT = 5              # most drawn in that window
 QUICK_POOL_COLD = 8             # most overdue (longest absent)
 QUICK_POOL_MID = 11             # all-time frequency nearest the average
 QUICK_POOL_REPEAT = 2           # balls of the most recent draw
-QUICK_POOL_TICKETS = 120         # default of combinations kept after filtering
+QUICK_POOL_TICKETS = 115         # default of combinations kept after filtering
 QUICK_POOL_SUM_RANGE = (115, 185)   # structural sum filter
 QUICK_POOL_SUM_TARGET = 153     # target sum for combination sorting
                                 # = sum(TARGET_COMBINATION), so the target sorts first
@@ -78,7 +78,13 @@ QUICK_POOL_MAX_SIZE = 36        # largest pool the target fit may build
 # Step 3 evaluation combination and mode:
 # TARGET_COMBINATION: specific combination to evaluate in Step 3 table (e.g. (3, 8, 11, 20, 33, 49)),
 # or None to evaluate the previous draw / random draw based on QUICK_POOL_EVAL_MODE
-TARGET_COMBINATION = None   # the combination Step 3 must be able to produce
+TARGET_COMBINATION = None # specific combination to evaluate; set to None to use previous or random draw
+    # If set to None, the evaluation will use the previous draw or a random draw based on QUICK_POOL_EVAL_MODE.
+    # If set to a specific combination, that combination will be evaluated regardless of the previous or random draw.
+    # Example:
+    #   TARGET_COMBINATION = (3, 8, 11, 20, 33, 49) or (12, 18, 23, 27, 28, 45)
+    #   QUICK_POOL_EVAL_MODE = 'auto'
+
 QUICK_POOL_EVAL_MODE = 'auto'   # 'auto' (TARGET_COMBINATION or previous draw), 'previous', 'random'
 QUICK_POOL_FIT_TARGET = True    # True = widen buckets in Step 1 to fit target; False = standard pool
 # How Step 3 orders its candidates.  Sum distance alone is not an ordering: thousands of
@@ -98,7 +104,7 @@ QUICK_POOL_RANK_MODE = 'auto'
 # QUICK_POOL_START_NUMBERS restricts that lowest ball to the numbers listed here; every
 # other rule (sum range, 3:3 odd/even, max numbers under 31, never-drawn, pool
 # membership, MAX_SHARED_BALLS) still applies unchanged.
-QUICK_POOL_START_NUMBERS = (3, 4, 5, 8, 9)    # allowed lowest ball; None or () = no constraint
+QUICK_POOL_START_NUMBERS = (6, 9, 11, 12)    # allowed lowest ball; None or () = no constraint
 QUICK_POOL_FIT_START_NUMBERS = True # True = widen Step 1 buckets so these balls reach the pool
                                     # (ball 2 is not in the standard pool, so without this
                                     # a start of 2 would simply yield nothing)
@@ -746,6 +752,7 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
 
     # Refine active pool based on table result
     refined_pool = sorted((set(pool) - excluded_numbers) | integrated_numbers)
+    target_values = tuple(target) if target is not None else ()
 
     # Produce 20 combinations adhering to structural constraints
     # Resolve the ranking mode.  'target' without a TARGET_COMBINATION has nothing to
@@ -754,7 +761,7 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
     rank_mode = QUICK_POOL_RANK_MODE
     if rank_mode == 'auto':
         rank_mode = 'target' if target else 'pool'
-    if rank_mode == 'target' and not target:
+    if rank_mode == 'target' and target is None:
         rank_mode = 'pool'
     if rank_mode not in ('target', 'pool', 'sum'):
         raise ValueError(f"QUICK_POOL_RANK_MODE must be 'auto', 'target', 'pool' or 'sum': "
@@ -785,7 +792,7 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
         # thousands of combinations share the target sum, so the sort falls through to
         # the lexicographic tie-break and returns 20 near-identical combinations.
         if rank_mode == 'target':
-            target_set = set(target)
+            target_set = set(target_values)
             structural_candidates.sort(
                 key=lambda item: (BALLS_DRAWN - len(target_set & set(item[1])), item[0], item[1]))
         elif rank_mode == 'pool':
