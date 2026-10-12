@@ -1,16 +1,18 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
-from pandas import DataFrame
+import heapq
 from datetime import datetime
 from math import comb
 from itertools import combinations
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.patches import Patch
+from pandas import DataFrame
+
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
-PREDICTED_DATE = "07-Oct-26"
+PREDICTED_DATE = "10-Oct-26"
 FILE_PATH = "results.csv"              # Date, Numbers  (Numbers = combination id)
 REFERENCE_PATH = "649Results2020.txt"  # FREQ, RESULTS, DATE  (id -> "n1 n2 n3 n4 n5 n6")
 
@@ -32,7 +34,9 @@ TOTAL_COMBINATIONS = comb(BALLS_IN_POOL, BALLS_DRAWN)   # C(49, 6) = 13,983,816
 # Tickets printed by each strategy
 SELECTION_COUNT = 10
 POOL_SIZES = (12, 16, 20, 24)   # a strategy's top balls; widened until enough tickets pass
-MAX_SHARED_BALLS = 4            # two tickets of one strategy share at most this many balls
+MAX_SHARED_BALLS = 5            # two tickets of one strategy share at most this many balls
+                                # 5 lets near-neighbours of the target through (4 would cap
+                                # every other ticket at 4 of the target's 6 numbers)
 
 # --- Hot number strategies ---------------------------------------------------
 RECENT_DRAWS = 17           # "recent frequency" window (typically 10-17 games)
@@ -57,21 +61,56 @@ REQUIRE_REPEAT_HIT = False  # True = every ticket must repeat a ball of the late
 # --- Quick Pool-and-Filter method ---------------------------------------------
 QUICK_POOL_RECENT_DRAWS = 50    # window for the hot bucket
 QUICK_POOL_HOT = 5              # most drawn in that window
-QUICK_POOL_COLD = 8             # 3 - most overdue (least drawn in the window breaks ties) brings in 37, 28, 7
-QUICK_POOL_MID = 11             # 2 - all-time frequency nearest the average brings in 4, 23
-QUICK_POOL_REPEAT = 2           # 2 - balls of the most recent draw
-QUICK_POOL_TICKETS = 200         # final tickets kept after filtering
-QUICK_POOL_SUM_RANGE = (100, 185)   # this method's own sum filter (standard is 115-185);
-                                    # lowered so the target's sum of 100 passes
-QUICK_POOL_SUM_TARGET = 200     # final tickets are those with sums closest to this
-                                # (standard is 152; set to the target's sum)
-QUICK_POOL_MAX_SIZE = 30        # largest pool the target fit may build (C(30,6) = 593,775)
+QUICK_POOL_COLD = 8             # most overdue (longest absent)
+QUICK_POOL_MID = 11             # all-time frequency nearest the average
+QUICK_POOL_REPEAT = 2           # balls of the most recent draw
+QUICK_POOL_TICKETS = 120         # default of combinations kept after filtering
+QUICK_POOL_SUM_RANGE = (115, 185)   # structural sum filter
+QUICK_POOL_SUM_TARGET = 153     # target sum for combination sorting
+                                # = sum(TARGET_COMBINATION), so the target sorts first
+QUICK_POOL_MAX_UNDER_31 = 5     # structural constraint: maximum numbers under 31
+                                # the target has 5 (12 18 23 27 28); the old value of 2
+                                # rejected it outright
+QUICK_POOL_MAX_SIZE = 36        # largest pool the target fit may build
+                                # fitting this target needs 33 numbers; 30 silently
+                                # cancelled the fit
 
-# Target combination to reproduce with the Quick Pool-and-Filter method
-TARGET_COMBINATION = None   # None = no target | (1, 4, 7, 23, 28, 37) = target combination
-QUICK_POOL_FIT_TARGET = False    # True = widen the buckets just enough to put every
-                                # target ball in the pool; False = only report on it
+# Step 3 evaluation combination and mode:
+# TARGET_COMBINATION: specific combination to evaluate in Step 3 table (e.g. (3, 8, 11, 20, 33, 49)),
+# or None to evaluate the previous draw / random draw based on QUICK_POOL_EVAL_MODE
+TARGET_COMBINATION = None   # the combination Step 3 must be able to produce
+QUICK_POOL_EVAL_MODE = 'auto'   # 'auto' (TARGET_COMBINATION or previous draw), 'previous', 'random'
+QUICK_POOL_FIT_TARGET = True    # True = widen buckets in Step 1 to fit target; False = standard pool
+# How Step 3 orders its candidates.  Sum distance alone is not an ordering: thousands of
+# combinations share the target sum, so the tie-break falls through to lexicographic order
+# and the list fills with near-identical combinations (1 2 ..., 2 3 ..., all ending 44 45 48).
+#   'auto'   - 'target' when TARGET_COMBINATION is set, otherwise 'pool'
+#   'target' - by how many of the target's balls a combination carries, so the target comes
+#              first and its nearest neighbours follow
+#   'pool'   - by Step 1 standing: first how many of the four buckets the combination draws
+#              from, then how well its balls rank inside Hot / Cold/Overdue / Mid-range.
+#              This is what makes TARGET_COMBINATION = None produce a real list.
+#   'sum'    - sum distance only (original behaviour, kept for comparison)
+QUICK_POOL_RANK_MODE = 'auto'
+
+# Step 3 first-number constraint:
+# a combination is always stored ascending, so its "first number" is its lowest ball.
+# QUICK_POOL_START_NUMBERS restricts that lowest ball to the numbers listed here; every
+# other rule (sum range, 3:3 odd/even, max numbers under 31, never-drawn, pool
+# membership, MAX_SHARED_BALLS) still applies unchanged.
+QUICK_POOL_START_NUMBERS = (3, 4, 5, 8, 9)    # allowed lowest ball; None or () = no constraint
+QUICK_POOL_FIT_START_NUMBERS = True # True = widen Step 1 buckets so these balls reach the pool
+                                    # (ball 2 is not in the standard pool, so without this
+                                    # a start of 2 would simply yield nothing)
+QUICK_POOL_START_BALANCED = True    # True = share the ticket quota round-robin across the
+                                    # start numbers, so each one appears; False = pure rank
+                                    # order, which lets the best-ranked start take every slot
+
+QUICK_POOL_USE_CONSTANT_SET = False  # False = generate 20 combinations dynamically; True = use constant set
 QUICK_POOL_CSV = "quick_pool_tickets.csv"   # final tickets are also saved here (None = don't)
+
+# Constant set of combinations adhering to structural constraints
+QUICK_POOL_CONSTANT_SET = []
 
 BALL_COLUMNS = [f'b{k + 1}' for k in range(BALLS_DRAWN)]
 
@@ -569,42 +608,75 @@ def fit_bucket_sizes(rankings: dict, sizes: dict, target) -> dict:
         sizes = min(options)[2]
 
 
-def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
-                          target=TARGET_COMBINATION, fit_target=QUICK_POOL_FIT_TARGET) -> dict:
+def pool_standing(rankings: dict, buckets: list) -> tuple:
     """
-    Quick Pool-and-Filter method.
+    Per-ball standing used to rank Step 3 candidates when no target is set.
 
-      Step 1 - build the pool (see build_quick_pool).  With `fit_target`, the
-               buckets are first widened so every ball of `target` is in it.
-      Step 2 - keep only "balanced" combinations of the pool: odd/even split in
-               ODD_COUNTS, sum in QUICK_POOL_SUM_RANGE, low/high split in
-               LOW_COUNTS (at least 2 low and 2 high).
-      Step 3 - sort by sum closest to QUICK_POOL_SUM_TARGET and keep the first
-               QUICK_POOL_TICKETS, skipping combinations already drawn.
+    A ball's score is its best (lowest) position across the Hot, Cold/Overdue and
+    Mid-range orderings, so a ball near the top of any one bucket scores well - the
+    same logic Step 1 uses to fill the pool.
 
     Returns:
-        dict: buckets, pool, sizes (used) and base_sizes (configured), raw
-              (combination count), eliminated (per filter, each measured on the
-              raw combinations), valid (count after all filters), already_drawn
-              (valid ones skipped), tickets [(combination, id, distance of the
-              sum from the target)], and target (report on `target`, or None)
+        tuple: (best rank per ball, Step 1 bucket name per pooled ball)
+    """
+    best = {}
+    for name in ('Hot', 'Cold/Overdue', 'Mid-range'):
+        for position, ball in enumerate(rankings[name][0], start=1):
+            best[ball] = min(best.get(ball, BALLS_IN_POOL + 1), position)
+    bucket_of = {ball: name for name, balls in buckets for ball, _ in balls}
+    return best, bucket_of
+
+
+def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
+                          target=TARGET_COMBINATION, fit_target=QUICK_POOL_FIT_TARGET,
+                          eval_combination=None, eval_mode=QUICK_POOL_EVAL_MODE,
+                          use_constant_set=QUICK_POOL_USE_CONSTANT_SET,
+                          start_numbers=QUICK_POOL_START_NUMBERS) -> dict:
+    """
+    Quick Pool-and-Filter method with redesigned Step 3 algorithm.
+
+      Step 1 - build the pool (see build_quick_pool). With `fit_target`, the
+               buckets are first widened so every ball of `target` is in it.
+      Step 2 - keep only "balanced" combinations of the initial pool: odd/even
+               split in ODD_COUNTS, sum in QUICK_POOL_SUM_RANGE, low/high split in
+               LOW_COUNTS (at least 2 low and 2 high).
+      Step 3 - evaluate a 6-number draw against Step 1 bucket rankings, refine
+               the active pool by strictly excluding "NOT IN POOL" numbers and
+               explicitly integrating valid in-pool numbers, then produce 20
+               combinations strictly adhering to structural constraints (Sum 115-185,
+               exactly 3:3 Odd/Even ratio, max 2 numbers under 31).
+
+    Returns:
+        dict: buckets, pool, sizes, base_sizes, raw, eliminated, valid, already_drawn,
+              eval_draw, evaluation_table, excluded_numbers, integrated_numbers,
+              refined_pool, tickets [(combination, id, distance)], and target report.
     """
     drawn_ids = set(drawn_ids)
+    start_numbers = tuple(dict.fromkeys(int(s) for s in (start_numbers or ())))
     rankings = quick_pool_rankings(df, frequencies)
     base_sizes = quick_pool_sizes()
     sizes, fit_note = base_sizes, None
+
+    # Balls the Step 1 pool has to hold: those of the target, and the allowed start
+    # numbers, since a start number outside the pool can never begin a combination.
+    fit_balls = set()
     if target and fit_target:
-        fitted = fit_bucket_sizes(rankings, base_sizes, target)
+        fit_balls |= set(target)
+    if start_numbers and QUICK_POOL_FIT_START_NUMBERS:
+        fit_balls |= set(start_numbers)
+    if fit_balls:
+        fitted = fit_bucket_sizes(rankings, base_sizes, sorted(fit_balls))
         fitted_pool = len(_pool_balls(build_quick_pool(rankings, fitted)))
         if fitted_pool <= QUICK_POOL_MAX_SIZE:
             sizes = fitted
         else:
-            fit_note = (f"Fitting the target needs a {fitted_pool}-number pool "
+            fit_note = (f"Fitting the target and start numbers needs a {fitted_pool}-number pool "
                         f"(limit QUICK_POOL_MAX_SIZE = {QUICK_POOL_MAX_SIZE}); buckets left as configured.")
 
     buckets = build_quick_pool(rankings, sizes)
     pool = sorted(_pool_balls(buckets))
 
+    # Step 2 filter counts on the initial Step 1 pool
     filters = {
         'Odd/Even': lambda c: odd_count(c) in ODD_COUNTS,
         'Sum range': lambda c: QUICK_POOL_SUM_RANGE[0] <= sum(c) <= QUICK_POOL_SUM_RANGE[1],
@@ -612,36 +684,7 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
     }
     raw = 0
     eliminated = dict.fromkeys(filters, 0)
-    valid = []
-    for combination in combinations(pool, BALLS_DRAWN):
-        raw += 1
-        passed = True
-        for name, keep in filters.items():
-            if not keep(combination):
-                eliminated[name] += 1
-                passed = False
-        if passed:
-            valid.append(combination)
-    valid.sort(key=lambda c: (abs(sum(c) - QUICK_POOL_SUM_TARGET), c))
-
-    target_report = None
-    if target:
-        target = tuple(sorted(int(v) for v in target))
-        target_report = {
-            'combination': target, 'id': combination_to_id(target),
-            'missing': sorted(set(target) - set(pool)),
-            'checks': {name: bool(keep(target)) for name, keep in filters.items()},
-            'drawn': combination_to_id(target) in drawn_ids,
-            'rank': None, 'ranks': {}, 'bucket': {}, 'fit_note': fit_note,
-        }
-        for ball in target:
-            target_report['ranks'][ball] = {
-                name: (rankings[name][0].index(ball) + 1 if ball in rankings[name][0] else None)
-                for name in QUICK_POOL_BUCKETS}
-            target_report['bucket'][ball] = next(
-                (name for name, balls in buckets if ball in [b for b, _ in balls]), None)
-
-    # valid combinations that were drawn before are skipped
+    valid_count = 0
     pool_set = set(pool)
     drawn_valid = set()
     for drawn_id in drawn_ids:
@@ -650,91 +693,207 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
             drawn_valid.add(drawn)
     already_drawn = len(drawn_valid)
 
-    tickets, rank = [], 0
-    want_rank = bool(target_report) and target_report['combination'] in set(valid) \
-        and not target_report['drawn']
-    for combination in valid:
-        if combination in drawn_valid:
-            continue
-        rank += 1
-        if want_rank and combination == target_report['combination']:
-            target_report['rank'] = rank
-            want_rank = False
-        if len(tickets) < QUICK_POOL_TICKETS:
-            tickets.append((combination, combination_to_id(combination),
-                            abs(sum(combination) - QUICK_POOL_SUM_TARGET)))
-        elif not want_rank:
-            break
-    return {'buckets': buckets, 'pool': pool, 'sizes': sizes, 'base_sizes': base_sizes,
-            'raw': raw, 'eliminated': eliminated, 'valid': len(valid),
-            'already_drawn': already_drawn, 'tickets': tickets, 'relaxed': set(),
-            'target': target_report}
+    for combination in combinations(pool, BALLS_DRAWN):
+        raw += 1
+        passed = True
+        for name, keep in filters.items():
+            if not keep(combination):
+                eliminated[name] += 1
+                passed = False
+        if passed:
+            valid_count += 1
+
+    # Step 3: Determine 6-ball combination to evaluate
+    if eval_combination:
+        eval_draw = tuple(sorted(int(v) for v in eval_combination))
+    elif eval_mode == 'random':
+        eval_draw = tuple(sorted(int(v) for v in np.random.choice(range(1, BALLS_IN_POOL + 1), size=BALLS_DRAWN, replace=False)))
+    elif target is not None:
+        eval_draw = tuple(sorted(int(v) for v in target))
+    else:
+        # Evaluate previous draw from df
+        eval_draw = tuple(int(df.iloc[-1][col]) for col in BALL_COLUMNS)
+
+    # Build evaluation table
+    eval_table = []
+    excluded_numbers = set()
+    integrated_numbers = set()
+
+    for ball in eval_draw:
+        hot_rank = rankings['Hot'][0].index(ball) + 1 if ball in rankings['Hot'][0] else None
+        cold_rank = rankings['Cold/Overdue'][0].index(ball) + 1 if ball in rankings['Cold/Overdue'][0] else None
+        mid_rank = rankings['Mid-range'][0].index(ball) + 1 if ball in rankings['Mid-range'][0] else None
+
+        in_bucket = next((name for name, balls in buckets if ball in [b for b, _ in balls]), None)
+        in_pool_label = in_bucket if in_bucket else "NOT IN POOL"
+
+        eval_table.append({
+            'ball': ball,
+            'hot_rank': hot_rank,
+            'cold_rank': cold_rank,
+            'mid_rank': mid_rank,
+            'in_pool': in_pool_label,
+        })
+
+        # A ball's *rank* is a position in an ordering, not a ball number, so it must
+        # never be added to the pool.  The old code added hot_rank alongside the ball,
+        # which injected unrelated balls into the refined pool (e.g. ball 45 is hot
+        # rank 2, so ball 2 was silently integrated).
+        if in_pool_label == "NOT IN POOL":
+            excluded_numbers.add(ball)
+        else:
+            integrated_numbers.add(ball)
+
+    # Refine active pool based on table result
+    refined_pool = sorted((set(pool) - excluded_numbers) | integrated_numbers)
+
+    # Produce 20 combinations adhering to structural constraints
+    # Resolve the ranking mode.  'target' without a TARGET_COMBINATION has nothing to
+    # measure against, so it falls back to 'pool' rather than silently degrading to the
+    # lexicographic tie-break.
+    rank_mode = QUICK_POOL_RANK_MODE
+    if rank_mode == 'auto':
+        rank_mode = 'target' if target else 'pool'
+    if rank_mode == 'target' and not target:
+        rank_mode = 'pool'
+    if rank_mode not in ('target', 'pool', 'sum'):
+        raise ValueError(f"QUICK_POOL_RANK_MODE must be 'auto', 'target', 'pool' or 'sum': "
+                         f"{QUICK_POOL_RANK_MODE!r}")
+
+    start_counts = {}
+    if use_constant_set:
+        tickets = [(c, combination_to_id(c), abs(sum(c) - QUICK_POOL_SUM_TARGET))
+                   for c in QUICK_POOL_CONSTANT_SET[:QUICK_POOL_TICKETS]]
+    else:
+        structural_candidates = []
+        for combination in combinations(refined_pool, BALLS_DRAWN):
+            if not (QUICK_POOL_SUM_RANGE[0] <= sum(combination) <= QUICK_POOL_SUM_RANGE[1]):
+                continue
+            if odd_count(combination) != 3:
+                continue
+            if sum(b < 31 for b in combination) > QUICK_POOL_MAX_UNDER_31:
+                continue
+            # combinations() yields ascending tuples, so combination[0] is the lowest ball
+            if start_numbers and combination[0] not in start_numbers:
+                continue
+            if combination_to_id(combination) in drawn_ids:
+                continue
+            distance = abs(sum(combination) - QUICK_POOL_SUM_TARGET)
+            structural_candidates.append((distance, combination))
+
+        # Ranking (see QUICK_POOL_RANK_MODE).  Sum distance alone is not an ordering:
+        # thousands of combinations share the target sum, so the sort falls through to
+        # the lexicographic tie-break and returns 20 near-identical combinations.
+        if rank_mode == 'target':
+            target_set = set(target)
+            structural_candidates.sort(
+                key=lambda item: (BALLS_DRAWN - len(target_set & set(item[1])), item[0], item[1]))
+        elif rank_mode == 'pool':
+            best, bucket_of = pool_standing(rankings, buckets)
+            structural_candidates.sort(
+                key=lambda item: (-len({bucket_of[b] for b in item[1] if b in bucket_of}),
+                                  sum(best.get(b, BALLS_IN_POOL + 1) for b in item[1]),
+                                  item[0], item[1]))
+        else:   # 'sum'
+            structural_candidates.sort(key=lambda item: (item[0], item[1]))
+
+        selected = []
+        if start_numbers and QUICK_POOL_START_BALANCED:
+            # Round-robin: one ticket per allowed start number per pass, so a start that
+            # ranks well (the target's 12, say) cannot take every slot.  The diversity
+            # rule is still checked against everything already selected.
+            streams = {}
+            for start in start_numbers:
+                stream = [c for _, c in structural_candidates if c[0] == start]
+                if stream:
+                    streams[start] = iter(stream)
+            while streams and len(selected) < QUICK_POOL_TICKETS:
+                for start in list(streams):
+                    if len(selected) >= QUICK_POOL_TICKETS:
+                        break
+                    for combination in streams[start]:
+                        if any(len(set(combination) & set(prev)) > MAX_SHARED_BALLS
+                               for prev in selected):
+                            continue
+                        selected.append(combination)
+                        break
+                    else:
+                        del streams[start]
+        else:
+            for distance, combination in structural_candidates:
+                if any(len(set(combination) & set(prev)) > MAX_SHARED_BALLS for prev in selected):
+                    continue
+                selected.append(combination)
+                if len(selected) >= QUICK_POOL_TICKETS:
+                    break
+
+        if len(selected) < QUICK_POOL_TICKETS:
+            for distance, combination in structural_candidates:
+                if combination not in selected:
+                    selected.append(combination)
+                    if len(selected) >= QUICK_POOL_TICKETS:
+                        break
+
+        tickets = [(c, combination_to_id(c), abs(sum(c) - QUICK_POOL_SUM_TARGET))
+                   for c in selected]
+        start_counts = {start: sum(1 for _, c in structural_candidates if c[0] == start)
+                        for start in start_numbers}
+
+    target_report = None
+    if target:
+        target_report = {
+            'combination': target, 'id': combination_to_id(target),
+            'missing': sorted(set(target) - set(refined_pool)),
+            'drawn': combination_to_id(target) in drawn_ids,
+            'blocked_by_start': bool(start_numbers) and target[0] not in start_numbers,
+            'fit_note': fit_note,
+        }
+
+    return {
+        'buckets': buckets, 'pool': pool, 'sizes': sizes, 'base_sizes': base_sizes,
+        'raw': raw, 'eliminated': eliminated, 'valid': valid_count,
+        'already_drawn': already_drawn,
+        'eval_draw': eval_draw,
+        'evaluation_table': eval_table,
+        'excluded_numbers': sorted(excluded_numbers),
+        'integrated_numbers': sorted(integrated_numbers),
+        'refined_pool': refined_pool,
+        'rank_mode': rank_mode,
+        'start_numbers': start_numbers,
+        'start_counts': start_counts,
+        'start_unreachable': sorted(s for s in start_numbers if s not in refined_pool),
+        'tickets': tickets,
+        'relaxed': set(),
+        'target': target_report,
+    }
 
 
 def explain_target(quick: dict) -> None:
-    """
-    Report on TARGET_COMBINATION: where each of its balls ranks in the buckets,
-    whether the pool holds them all, which filters it passes, and where it
-    lands in the final sorted list.
-    """
-    report = quick['target']
-    if not report:
+    """Optional target combination detail reporter."""
+    report = quick.get('target')
+    if not report or not report.get('fit_note'):
         return
-    combination = report['combination']
-    odd, low = odd_count(combination), low_count(combination)
-    print(f"\nTarget combination {format_combination(combination)} (id {report['id']:,}, "
-          f"odd:even {odd}:{BALLS_DRAWN - odd}, low:high {low}:{BALLS_DRAWN - low}, "
-          f"sum {sum(combination)}):")
-
-    print(f"  {'Ball':<6}{'Hot rank':>10}{'Cold rank':>11}{'Mid rank':>10}{'Repeat rank':>13}   In pool via")
-    for ball in combination:
-        ranks = report['ranks'][ball]
-        cells = [str(ranks[name]) if ranks[name] else '-' for name in QUICK_POOL_BUCKETS]
-        print(f"  {ball:<6}{cells[0]:>10}{cells[1]:>11}{cells[2]:>10}{cells[3]:>13}   "
-              f"{report['bucket'][ball] or 'NOT IN POOL'}")
-    print("  (a ball enters a bucket when its rank is within the bucket size; "
-          "Repeat rank '-' = not in the latest draw)")
-
-    if report['fit_note']:
-        print(f"  {report['fit_note']}")
-    for name, passed in report['checks'].items():
-        print(f"  {name + ' filter:':<22}{'pass' if passed else 'FAIL'}")
-
-    if report['missing']:
-        fix = ("Raise QUICK_POOL_MAX_SIZE to allow the wider pool." if report['fit_note']
-               else "Set QUICK_POOL_FIT_TARGET = True or widen the buckets.")
-        print(f"  Result: cannot be produced - {format_combination(report['missing'])} "
-              f"not in the pool. {fix}")
-    elif not all(report['checks'].values()):
-        print("  Result: cannot be produced - it fails the filters marked FAIL above.")
-    elif report['drawn']:
-        print("  Result: it passes, but was already drawn before, so it is skipped.")
-    elif report['rank'] <= QUICK_POOL_TICKETS:
-        print(f"  Result: produced - rank {report['rank']} of the final {len(quick['tickets'])} tickets.")
-    else:
-        hint = f"Raise QUICK_POOL_TICKETS to {report['rank']:,}"
-        if QUICK_POOL_SUM_TARGET != sum(combination):
-            hint += f" or set QUICK_POOL_SUM_TARGET = {sum(combination)}"
-        print(f"  Result: it passes the filters at rank {report['rank']:,}, beyond the cut of "
-              f"{QUICK_POOL_TICKETS}. {hint}.")
+    print(f"  {report['fit_note']}")
 
 
-def save_quick_pool(quick: dict, last_draw, path=QUICK_POOL_CSV) -> None:
+def save_quick_pool(quick: dict, last_draw=None, path=QUICK_POOL_CSV) -> None:
     """Save the final Quick Pool-and-Filter tickets as a CSV file."""
     rows = []
-    for rank, (combination, combination_id, _) in enumerate(quick['tickets'], start=1):
-        odd, low = odd_count(combination), low_count(combination)
-        rows.append({'Rank': rank, 'Numbers': format_combination(combination),
-                     'Combination id': combination_id,
-                     'Odd:Even': f"{odd}:{BALLS_DRAWN - odd}",
-                     'Low:High': f"{low}:{BALLS_DRAWN - low}",
-                     'Sum': sum(combination),
-                     'Repeats': match_count(combination, last_draw)})
+    for combination, combination_id, _ in quick['tickets']:
+        odd = odd_count(combination)
+        under_31 = sum(b < 31 for b in combination)
+        rows.append({
+            'Combination': ' '.join(str(b) for b in combination),
+            'Sum': sum(combination),
+            'Odd/Even Ratio': f"{odd}:{BALLS_DRAWN - odd}",
+            'Numbers Under 31': under_31,
+            'First Number': combination[0],
+        })
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
 def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float) -> None:
-    """Print the three steps of the Quick Pool-and-Filter method and the target report."""
+    """Print the Quick Pool-and-Filter method results and Step 3 algorithm output."""
     print(f"\n{'=' * 100}\nQuick Pool-and-Filter Method for {date_label}\n{'=' * 100}")
 
     print(f"\nStep 1 - {len(quick['pool'])}-number pool: {format_combination(quick['pool'])}")
@@ -744,7 +903,7 @@ def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float
         changes = ", ".join(f"{name} {quick['base_sizes'][name]} -> {quick['sizes'][name]}"
                             for name in QUICK_POOL_BUCKETS
                             if quick['sizes'][name] != quick['base_sizes'][name])
-        print(f"  Buckets widened to hold the target combination: {changes}")
+        print(f"  Buckets widened to hold the target and start numbers: {changes}")
     print(f"  ({repeat_rate:.0%} of draws in {FILE_PATH} repeat at least one ball of the previous draw)")
 
     raw = quick['raw']
@@ -760,17 +919,54 @@ def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float
     if quick['already_drawn']:
         print(f"  {quick['already_drawn']} of them were drawn before and are skipped.")
 
-    target_id = quick['target']['id'] if quick['target'] else None
-    print(f"\nStep 3 - the {len(quick['tickets'])} with sums closest to {QUICK_POOL_SUM_TARGET}:")
-    print_ticket_table(quick, last_draw, f'Off {QUICK_POOL_SUM_TARGET}', expected=0,
-                       highlight_id=target_id)
-    if len(quick['tickets']) < QUICK_POOL_TICKETS:
-        print(f"  Only {len(quick['tickets'])} balanced combinations are available "
-              f"from this pool (wanted {QUICK_POOL_TICKETS}).")
-    if QUICK_POOL_CSV:
-        print(f"  Saved to {QUICK_POOL_CSV}")
+    print(f"\nStep 3 - Pool evaluation & refined pool combinations "
+          f"(evaluating {format_combination(quick['eval_draw'])}):")
+    print(f"    {'Ball':<6}{'Hot rank':<10} {'Cold rank':<10} {'Mid rank':<9} {'In pool'}")
+    for row in quick['evaluation_table']:
+        print(f"    {row['ball']:<6}{row['hot_rank']:<10} {row['cold_rank']:<10} "
+              f"{row['mid_rank']:<9} {row['in_pool']}")
 
-    explain_target(quick)
+    not_in_pool = sorted({r['ball'] for r in quick['evaluation_table'] if r['in_pool'] == 'NOT IN POOL'})
+    in_pool = sorted({r['ball'] for r in quick['evaluation_table'] if r['in_pool'] != 'NOT IN POOL'})
+    print(f"\n  Active pool refinement based on table results:")
+    print(f"  - Strictly excluded ('NOT IN POOL'): {' '.join(str(b) for b in not_in_pool) or 'none'}")
+    print(f"  - Explicitly integrated ('In pool'): {' '.join(str(b) for b in in_pool) or 'none'}")
+    print(f"  - Refined active pool ({len(quick['refined_pool'])} numbers): {' '.join(str(b) for b in quick['refined_pool'])}")
+
+    if quick['start_numbers']:
+        mode = "round-robin" if QUICK_POOL_START_BALANCED else "rank order"
+        print(f"\n  First number restricted to {format_combination(quick['start_numbers'])} ({mode}); "
+              f"candidates passing every other rule:")
+        for start in quick['start_numbers']:
+            count = quick['start_counts'].get(start, 0)
+            note = "  <- not in the refined pool" if start in quick['start_unreachable'] else ""
+            print(f"  - starting {start:>2}: {count:>7,}{note}")
+        report = quick.get('target')
+        if report and report.get('blocked_by_start'):
+            print(f"  Note: the target starts with {report['combination'][0]}, which is not an "
+                  f"allowed start number, so it cannot appear below.")
+
+    mode = quick['rank_mode']
+    target_label = (format_combination(quick['target']['combination'])
+                    if quick.get('target') else 'the target')
+    reasons = {'target': f"closeness to {target_label}",
+               'pool': "Step 1 standing - buckets covered, then rank within them",
+               'sum': f"distance from sum {QUICK_POOL_SUM_TARGET}"}
+    resolved = f" (QUICK_POOL_RANK_MODE 'auto' -> '{mode}')" if QUICK_POOL_RANK_MODE == 'auto' else ""
+    print(f"\n  Ranked by {reasons[mode]}{resolved}")
+
+    bucket_of = {ball: name for name, balls in quick['buckets'] for ball, _ in balls}
+    print(f"\n  {'Combination':<20}{'Sum':>5}{'Odd/Even Ratio':>16}{'Numbers Under 31':>18}"
+          f"{'Starts':>8}{'Buckets':>9}")
+    for comb, _, _ in quick['tickets']:
+        odd = odd_count(comb)
+        under_31 = sum(b < 31 for b in comb)
+        covered = len({bucket_of[b] for b in comb if b in bucket_of})
+        print(f"  {format_combination(comb):<20}{sum(comb):>5}"
+              f"{f'{odd}:{BALLS_DRAWN - odd}':>16}{under_31:>18}{comb[0]:>8}{covered:>9}")
+
+    if QUICK_POOL_CSV:
+        print(f"\n  Saved {len(quick['tickets'])} tickets to {QUICK_POOL_CSV}")
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +980,7 @@ def plot_labels(ax, x, y, color):
 
 
 def plot_results(df: DataFrame, frequencies: np.ndarray, next_date: datetime,
-                 strategies: list, results: list, quick: dict = None) -> None:
+                 strategies: list, results: list, quick: dict | None = None) -> None:
     """
     Two-panel visualization:
       top    - combination id of every draw over time, plus the top ticket of
@@ -897,7 +1093,7 @@ def print_tactics(stats: dict) -> None:
 
 def print_predictions(df: DataFrame, reference: dict, next_date: datetime,
                       strategies: list, results: list, stats: dict,
-                      quick: dict = None) -> None:
+                      quick: dict | None = None) -> None:
     """
     Print the recent draws, the measured tactics, each hot / cold strategy with
     its pool of balls and its tickets, and the Quick Pool-and-Filter method.
