@@ -78,11 +78,11 @@ QUICK_POOL_MAX_SIZE = 36        # largest pool the target fit may build
 # Step 3 evaluation combination and mode:
 # TARGET_COMBINATION: specific combination to evaluate in Step 3 table (e.g. (3, 8, 11, 20, 33, 49)),
 # or None to evaluate the previous draw / random draw based on QUICK_POOL_EVAL_MODE
-TARGET_COMBINATION = None # specific combination to evaluate; set to None to use previous or random draw
+TARGET_COMBINATION = (13, 16, 20, 21, 27, 48) # specific combination to evaluate; set to None to use previous or random draw
     # If set to None, the evaluation will use the previous draw or a random draw based on QUICK_POOL_EVAL_MODE.
     # If set to a specific combination, that combination will be evaluated regardless of the previous or random draw.
     # Example:
-    #   TARGET_COMBINATION = (3, 8, 11, 20, 33, 49) or (12, 18, 23, 27, 28, 45)
+    #   TARGET_COMBINATION = (3, 8, 11, 20, 33, 49) or (12, 18, 23, 27, 28, 45) or 12 28 31 35 38 46
     #   QUICK_POOL_EVAL_MODE = 'auto'
 
 QUICK_POOL_EVAL_MODE = 'auto'   # 'auto' (TARGET_COMBINATION or previous draw), 'previous', 'random'
@@ -97,14 +97,19 @@ QUICK_POOL_FIT_TARGET = True    # True = widen buckets in Step 1 to fit target; 
 #              from, then how well its balls rank inside Hot / Cold/Overdue / Mid-range.
 #              This is what makes TARGET_COMBINATION = None produce a real list.
 #   'sum'    - sum distance only (original behaviour, kept for comparison)
-QUICK_POOL_RANK_MODE = 'auto'
-
+QUICK_POOL_RANK_MODE = 'auto' # ranking mode for Step 3 candidates
 # Step 3 first-number constraint:
 # a combination is always stored ascending, so its "first number" is its lowest ball.
 # QUICK_POOL_START_NUMBERS restricts that lowest ball to the numbers listed here; every
 # other rule (sum range, 3:3 odd/even, max numbers under 31, never-drawn, pool
 # membership, MAX_SHARED_BALLS) still applies unchanged.
-QUICK_POOL_START_NUMBERS = (6, 9, 11, 12)    # allowed lowest ball; None or () = no constraint
+QUICK_POOL_START_NUMBERS = ()    # allowed lowest ball; None or () = no constraint
+# Step 3 start-number constraint settings
+# These settings control how the Step 3 pool handles combinations based on their starting numbers.
+# QUICK_POOL_FIT_START_NUMBERS: If True, ensures that combinations starting with the specified numbers
+#   are included in the pool by widening the Step 1 buckets.
+# QUICK_POOL_START_BALANCED: If True, distributes the ticket quota evenly across the allowed start numbers.
+
 QUICK_POOL_FIT_START_NUMBERS = True # True = widen Step 1 buckets so these balls reach the pool
                                     # (ball 2 is not in the standard pool, so without this
                                     # a start of 2 would simply yield nothing)
@@ -112,7 +117,7 @@ QUICK_POOL_START_BALANCED = True    # True = share the ticket quota round-robin 
                                     # start numbers, so each one appears; False = pure rank
                                     # order, which lets the best-ranked start take every slot
 
-QUICK_POOL_USE_CONSTANT_SET = False  # False = generate 20 combinations dynamically; True = use constant set
+QUICK_POOL_USE_CONSTANT_SET = False  # False = generate combinations dynamically; True = use constant set
 QUICK_POOL_CSV = "quick_pool_tickets.csv"   # final tickets are also saved here (None = don't)
 
 # Constant set of combinations adhering to structural constraints
@@ -963,13 +968,14 @@ def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float
     print(f"\n  Ranked by {reasons[mode]}{resolved}")
 
     bucket_of = {ball: name for name, balls in quick['buckets'] for ball, _ in balls}
-    print(f"\n  {'Combination':<20}{'Sum':>5}{'Odd/Even Ratio':>16}{'Numbers Under 31':>18}"
+    print(f"\n  {'Combination':<20}{'ID':>12}{'Sum':>5}{'Odd/Even Ratio':>16}{'Numbers Under 31':>18}"
           f"{'Starts':>8}{'Buckets':>9}")
     for comb, _, _ in quick['tickets']:
         odd = odd_count(comb)
+        combination_id = combination_to_id(comb)
         under_31 = sum(b < 31 for b in comb)
         covered = len({bucket_of[b] for b in comb if b in bucket_of})
-        print(f"  {format_combination(comb):<20}{sum(comb):>5}"
+        print(f"  {format_combination(comb):<20}{combination_id:>12}{sum(comb):>5}"
               f"{f'{odd}:{BALLS_DRAWN - odd}':>16}{under_31:>18}{comb[0]:>8}{covered:>9}")
 
     if QUICK_POOL_CSV:

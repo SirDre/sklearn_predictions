@@ -1,3 +1,4 @@
+import warnings
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # Configuration constants
-PREDICTED_DATE = "18-Dec-24"
+PREDICTED_DATE = "14-Oct-26"
 FILE_PATH = "results.csv"
 
 def load_and_prepare_data(file_path) -> tuple:
@@ -51,7 +52,10 @@ def train_naive_bayes_model(X, y) -> tuple:
     # behavior: no held-out data, calibrate directly on the frozen model's predictions.
     all_indices = np.arange(len(y))
     model = CalibratedClassifierCV(FrozenEstimator(gnb), cv=[(all_indices, all_indices)])
-    model.fit(X, y)
+    with warnings.catch_warnings():
+        # Each draw number is intentionally treated as a class label
+        warnings.filterwarnings("ignore", message="The number of unique classes is greater than 50%", category=UserWarning)
+        model.fit(X, y)
     return gnb, model
 
 def generate_predictions(df: DataFrame, model: CalibratedClassifierCV, gnb: GaussianNB) -> tuple:
