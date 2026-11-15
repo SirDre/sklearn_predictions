@@ -11,7 +11,7 @@ from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # Configuration constants
-PREDICTED_DATE = "14-Oct-26"
+PREDICTED_DATE = "07-Nov-26"
 FILE_PATH = "results.csv"
 
 def load_and_prepare_data(file_path) -> tuple:

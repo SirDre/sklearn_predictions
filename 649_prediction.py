@@ -12,7 +12,7 @@ from pandas import DataFrame
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
-PREDICTED_DATE = "14-Oct-26"
+PREDICTED_DATE = "14-Nov-26"
 FILE_PATH = "results.csv"              # Date, Numbers  (Numbers = combination id)
 REFERENCE_PATH = "649Results2020.txt"  # FREQ, RESULTS, DATE  (id -> "n1 n2 n3 n4 n5 n6")
 
@@ -32,8 +32,8 @@ BONUS_POOL_SIZE = BALLS_IN_POOL # balls in the bonus pool (may equal the main po
 TOTAL_COMBINATIONS = comb(BALLS_IN_POOL, BALLS_DRAWN)   # C(49, 6) = 13,983,816
 
 # Tickets printed by each strategy
-SELECTION_COUNT = 10
-POOL_SIZES = (12, 16, 20, 24)   # a strategy's top balls; widened until enough tickets pass
+SELECTION_COUNT = 30
+POOL_SIZES = (12, 16, 20, 24)   # a strategy's top balls; widened until enough tickets pass; typically increased in steps of 4; helps balance coverage and overlap; ensures diverse ticket combinations
 MAX_SHARED_BALLS = 5            # two tickets of one strategy share at most this many balls
                                 # 5 lets near-neighbours of the target through (4 would cap
                                 # every other ticket at 4 of the target's 6 numbers)
@@ -66,23 +66,31 @@ QUICK_POOL_MID = 11             # all-time frequency nearest the average
 QUICK_POOL_REPEAT = 2           # balls of the most recent draw
 QUICK_POOL_TICKETS = 115         # default of combinations kept after filtering
 QUICK_POOL_SUM_RANGE = (115, 185)   # structural sum filter
-QUICK_POOL_SUM_TARGET = 153     # target sum for combination sorting
+QUICK_POOL_SUM_TARGET = 152     # target sum for combination sorting
                                 # = sum(TARGET_COMBINATION), so the target sorts first
+                                # 5 + 22 + 23 + 32 + 33 + 37 = 152
+QUICK_POOL_ODD_COUNTS = ODD_COUNTS  # odd/even splits Step 3 accepts.  This was hard-coded
+                                # to "exactly 3 odd", which rejected any target that is not
+                                # a 3:3 split, so it never reached the table.
+                                # ODD_COUNTS = (2, 3, 4) admits the target and
+                                # its near neighbours; set it to (4,) to print 4:2 only.
 QUICK_POOL_MAX_UNDER_31 = 5     # structural constraint: maximum numbers under 31
-                                # the target has 5 (12 18 23 27 28); the old value of 2
-                                # rejected it outright
-QUICK_POOL_MAX_SIZE = 36        # largest pool the target fit may build
-                                # fitting this target needs 33 numbers; 30 silently
-                                # cancelled the fit
+                                # the target has 3 (5 22 23), so this is not binding
+QUICK_POOL_MAX_SIZE = 40        # largest pool the target fit may build
+                                # fitting this target needs 40 numbers (balls 23, 32 and 37
+                                # are mid-table everywhere, so Mid-range widens 11 -> 26);
+                                # the old value of 36 silently cancelled the fit
 
 # Step 3 evaluation combination and mode:
 # TARGET_COMBINATION: specific combination to evaluate in Step 3 table (e.g. (3, 8, 11, 20, 33, 49)),
 # or None to evaluate the previous draw / random draw based on QUICK_POOL_EVAL_MODE
-TARGET_COMBINATION = (13, 16, 20, 21, 27, 48) # specific combination to evaluate; set to None to use previous or random draw
+TARGET_COMBINATION = () # specific combination to evaluate; set to None to use previous or random draw
     # If set to None, the evaluation will use the previous draw or a random draw based on QUICK_POOL_EVAL_MODE.
     # If set to a specific combination, that combination will be evaluated regardless of the previous or random draw.
     # Example:
-    #   TARGET_COMBINATION = (3, 8, 11, 20, 33, 49) or (12, 18, 23, 27, 28, 45) or 12 28 31 35 38 46
+    #   TARGET_COMBINATION = (3, 8, 11, 20, 33, 49) or 9 20 22 29 37 47
+    #   A target must also satisfy QUICK_POOL_SUM_RANGE, QUICK_POOL_ODD_COUNTS and
+    #   QUICK_POOL_MAX_UNDER_31, and QUICK_POOL_SUM_TARGET should be set to its sum.
     #   QUICK_POOL_EVAL_MODE = 'auto'
 
 QUICK_POOL_EVAL_MODE = 'auto'   # 'auto' (TARGET_COMBINATION or previous draw), 'previous', 'random'
@@ -101,9 +109,11 @@ QUICK_POOL_RANK_MODE = 'auto' # ranking mode for Step 3 candidates
 # Step 3 first-number constraint:
 # a combination is always stored ascending, so its "first number" is its lowest ball.
 # QUICK_POOL_START_NUMBERS restricts that lowest ball to the numbers listed here; every
-# other rule (sum range, 3:3 odd/even, max numbers under 31, never-drawn, pool
-# membership, MAX_SHARED_BALLS) still applies unchanged.
+# other rule (sum range, QUICK_POOL_ODD_COUNTS odd/even, max numbers under 31, never-drawn,
+# pool membership, MAX_SHARED_BALLS) still applies unchanged.
 QUICK_POOL_START_NUMBERS = ()    # allowed lowest ball; None or () = no constraint
+                                 # set to (5,) to print only combinations that, like the
+                                 # target, open on ball 5
 # Step 3 start-number constraint settings
 # These settings control how the Step 3 pool handles combinations based on their starting numbers.
 # QUICK_POOL_FIT_START_NUMBERS: If True, ensures that combinations starting with the specified numbers
@@ -653,9 +663,10 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
                LOW_COUNTS (at least 2 low and 2 high).
       Step 3 - evaluate a 6-number draw against Step 1 bucket rankings, refine
                the active pool by strictly excluding "NOT IN POOL" numbers and
-               explicitly integrating valid in-pool numbers, then produce 20
-               combinations strictly adhering to structural constraints (Sum 115-185,
-               exactly 3:3 Odd/Even ratio, max 2 numbers under 31).
+               explicitly integrating valid in-pool numbers, then produce
+               QUICK_POOL_TICKETS combinations adhering to the structural constraints
+               (sum in QUICK_POOL_SUM_RANGE, odd/even split in QUICK_POOL_ODD_COUNTS,
+               at most QUICK_POOL_MAX_UNDER_31 numbers under 31).
 
     Returns:
         dict: buckets, pool, sizes, base_sizes, raw, eliminated, valid, already_drawn,
@@ -781,7 +792,7 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
         for combination in combinations(refined_pool, BALLS_DRAWN):
             if not (QUICK_POOL_SUM_RANGE[0] <= sum(combination) <= QUICK_POOL_SUM_RANGE[1]):
                 continue
-            if odd_count(combination) != 3:
+            if odd_count(combination) not in QUICK_POOL_ODD_COUNTS:
                 continue
             if sum(b < 31 for b in combination) > QUICK_POOL_MAX_UNDER_31:
                 continue
@@ -881,25 +892,65 @@ def quick_pool_and_filter(df: DataFrame, frequencies: np.ndarray, drawn_ids=(),
 
 
 def explain_target(quick: dict) -> None:
-    """Optional target combination detail reporter."""
+    """
+    Report whether the target combination can actually be printed, and why not when
+    it cannot.  Every rule that can silently drop it is checked here, so a target
+    that never appears in the table below always comes with a reason.
+    """
     report = quick.get('target')
-    if not report or not report.get('fit_note'):
+    if not report:
         return
-    print(f"  {report['fit_note']}")
+    combination = tuple(report['combination'])
+    odd, under_31 = odd_count(combination), sum(b < 31 for b in combination)
+    print(f"\n  Target {format_combination(combination)}  "
+          f"(id {report['id']:,}, sum {sum(combination)}, "
+          f"{odd}:{BALLS_DRAWN - odd} odd/even, {under_31} under 31):")
+    if report.get('fit_note'):
+        print(f"  - {report['fit_note']}")
+
+    blockers = []
+    if report['missing']:
+        blockers.append(f"not in the refined pool: {format_combination(report['missing'])}")
+    if report['drawn']:
+        blockers.append("already drawn before, so it is skipped")
+    if report['blocked_by_start']:
+        blockers.append(f"opens on {combination[0]}, which is not an allowed start number")
+    if not QUICK_POOL_SUM_RANGE[0] <= sum(combination) <= QUICK_POOL_SUM_RANGE[1]:
+        blockers.append(f"sum {sum(combination)} is outside QUICK_POOL_SUM_RANGE "
+                        f"{QUICK_POOL_SUM_RANGE}")
+    if odd not in QUICK_POOL_ODD_COUNTS:
+        blockers.append(f"{odd}:{BALLS_DRAWN - odd} is not in QUICK_POOL_ODD_COUNTS "
+                        f"{tuple(QUICK_POOL_ODD_COUNTS)}")
+    if under_31 > QUICK_POOL_MAX_UNDER_31:
+        blockers.append(f"{under_31} numbers under 31 exceeds QUICK_POOL_MAX_UNDER_31 "
+                        f"({QUICK_POOL_MAX_UNDER_31})")
+
+    if blockers:
+        for blocker in blockers:
+            print(f"  - cannot be printed: {blocker}")
+    else:
+        rank = next((position for position, (comb, _, _) in enumerate(quick['tickets'], start=1)
+                     if tuple(comb) == combination), None)
+        print(f"  - passes every filter; "
+              + (f"printed at rank {rank} below" if rank else
+                 "ranked below the printed tickets - raise QUICK_POOL_TICKETS"))
 
 
 def save_quick_pool(quick: dict, last_draw=None, path=QUICK_POOL_CSV) -> None:
     """Save the final Quick Pool-and-Filter tickets as a CSV file."""
+    target_set = set(quick['target']['combination']) if quick.get('target') else set()
     rows = []
     for combination, combination_id, _ in quick['tickets']:
         odd = odd_count(combination)
         under_31 = sum(b < 31 for b in combination)
         rows.append({
             'Combination': ' '.join(str(b) for b in combination),
+            'Combination id': combination_id,
             'Sum': sum(combination),
             'Odd/Even Ratio': f"{odd}:{BALLS_DRAWN - odd}",
             'Numbers Under 31': under_31,
             'First Number': combination[0],
+            'Shared with target': len(target_set & set(combination)) if target_set else '',
         })
     pd.DataFrame(rows).to_csv(path, index=False)
 
@@ -945,6 +996,8 @@ def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float
     print(f"  - Explicitly integrated ('In pool'): {' '.join(str(b) for b in in_pool) or 'none'}")
     print(f"  - Refined active pool ({len(quick['refined_pool'])} numbers): {' '.join(str(b) for b in quick['refined_pool'])}")
 
+    explain_target(quick)
+
     if quick['start_numbers']:
         mode = "round-robin" if QUICK_POOL_START_BALANCED else "rank order"
         print(f"\n  First number restricted to {format_combination(quick['start_numbers'])} ({mode}); "
@@ -968,15 +1021,21 @@ def print_quick_pool(quick: dict, last_draw, date_label: str, repeat_rate: float
     print(f"\n  Ranked by {reasons[mode]}{resolved}")
 
     bucket_of = {ball: name for name, balls in quick['buckets'] for ball, _ in balls}
+    target_values = tuple(quick['target']['combination']) if quick.get('target') else ()
+    target_set = set(target_values)
     print(f"\n  {'Combination':<20}{'ID':>12}{'Sum':>5}{'Odd/Even Ratio':>16}{'Numbers Under 31':>18}"
-          f"{'Starts':>8}{'Buckets':>9}")
+          f"{'Starts':>8}{'Buckets':>9}{'Target':>8}")
     for comb, _, _ in quick['tickets']:
         odd = odd_count(comb)
         combination_id = combination_to_id(comb)
         under_31 = sum(b < 31 for b in comb)
         covered = len({bucket_of[b] for b in comb if b in bucket_of})
+        shared = len(target_set & set(comb)) if target_set else 0
+        flag = f"{shared}/{BALLS_DRAWN}" if target_set else ""
+        mark = "  <- target" if target_set and tuple(comb) == target_values else ""
         print(f"  {format_combination(comb):<20}{combination_id:>12}{sum(comb):>5}"
-              f"{f'{odd}:{BALLS_DRAWN - odd}':>16}{under_31:>18}{comb[0]:>8}{covered:>9}")
+              f"{f'{odd}:{BALLS_DRAWN - odd}':>16}{under_31:>18}{comb[0]:>8}{covered:>9}"
+              f"{flag:>8}{mark}")
 
     if QUICK_POOL_CSV:
         print(f"\n  Saved {len(quick['tickets'])} tickets to {QUICK_POOL_CSV}")
